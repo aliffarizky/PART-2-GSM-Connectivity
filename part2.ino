@@ -1,138 +1,175 @@
-#include <SoftwareSerial.h>
-#define DEBUG true
-SoftwareSerial myGsm(3,4);
-String data_csq[5];
-String data_ip[3];
-String csq,real_csq,ip;
+#include <SoftwareSerial.h>  //include software serial library
+SoftwareSerial client(3,4); //Assigning TX(3) & RX(4) pin to the module
+#define DEBUG true //defining debug variable
 
+//Define Variables
+String raw_gsm,gsm,ip; 
+String data_ip[3];
+String data_gsm[3];
 void setup()
 {
- myGsm.begin(9600);  
+ client.begin(9600);  
  Serial.begin(9600);  
  delay(500);
 
- Serial.println("======================INIT=============================");
- sendData("AT+CGATT=1",200,DEBUG); //enable GPRS Connection
- delay(1000);
- sendData("AT+SAPBR=3,1,\"CONTYPE\",\"GPRS\"",1000,DEBUG); //Declare Connection Type (GPRS)
- delay(1000);
- sendData("AT+SAPBR=3,1,\"APN\",\"\"",5000,DEBUG); //Delare APN Name
- delay(1000);
- sendData("AT+SAPBR=1,1",10000,DEBUG); //Enable GPRS & APN Setting
- delay(1000);
- sendData("AT+CSQ",200,DEBUG); //GSM Signal Quality
- //Value from AT+CSQ 1 = -111 dBm with +2 dBm each incerement on value
- delay(1000);
-
- sendData("AT+HTTPINIT",2000,DEBUG); //Initializing HTTP
- delay(1000);
- sendData("AT+HTTPPARA=\"URL\",\"http://ipv4bot.whatismyipaddress.com\"",1000,DEBUG); //Setting HTTP Parameter
- delay(1000);
- sendData("AT+HTTPACTION=0",3000,DEBUG); //Enabling GET Action
- delay(1000);
- sendipData("AT+HTTPREAD=0,20",3000,DEBUG); //Read HTTP Data and parsing it
- delay(1000);
- sendData("AT+HTTPTERM",1000,DEBUG); //Terminate HTTP Service
- delay(1000);
- sendCSQData("AT+CSQ",200,DEBUG); //Parsing GSM signal response
- delay(1000);
- Serial.println("================DONE, PRINT IP ADRESS & GSM STRENGTH======================");
- Serial.println("Ip:"+ip);
- real_csq = (((csq.toInt() - 1) * 2) - 111);  //Value from AT+CSQ 1 = -111 dBm with +2 dBm each incerement on value
- Serial.println("Gsm:"+real_csq+" dBm");
+ connectGPRS(); //Setup GPRS Connection
  
 }
 
 void loop()
 {
-
+  readIP(); //Read the Ip from htttp://ipv4bot.whatismyipaddress.com 
+  if (ip == "") //check if GET HTTP fail to read the IP
+  {
+    readIP(); //Read the IP
+  }
+  readGSM(); //Read GSM Signal Strength
+  Serial.println("Ip address :"+ip);
+  Serial.println("GSM Strength:"+gsm+"dBm");
+  delay(1000);
+  clear_buf(); //clear
 }
 
-//============================AT COMMAND=================================
-String sendData (String command , const int timeout ,boolean debug)
+//=========================================================READ GSM====================================================================
+void readGSM()
 {
-  String response = "";
-  myGsm.println(command);
-  long int time = millis();
-  int i = 0;
-
-  while ( (time+timeout ) > millis())
-  {
-    while (myGsm.available())
-    {
-      char c = myGsm.read();
-      response +=c;
-    }
-  }
-  if (debug) 
-    {
-     Serial.print(response);
-    }
-  return response;
+  sendGsmData("AT+CSQ",1000,DEBUG); //AT-Command to display GSM Signal Strength Info and parsing it. Ranged and conversed to 113 - 53 dBM, https://m2msupport.net/m2msupport/atcsq-signal-quality/
+  delay(1000);
 }
 
-//============================PARSE CSQ (Signal Quality)=============================
-void sendCSQData(String command , const int timeout , boolean debug)
+//=========================================================PARSE GSM====================================================================
+void sendGsmData(String command , const int timeout , boolean debug)
 {
-  myGsm.println(command);
-  long int time = millis();
-  int i = 0;
+  client.println(command); //print the command to module
+  long int time = millis(); //Set timer for timeout
+  int k = 0;
 
-  while((time+timeout) > millis())
-  {
-    while(myGsm.available())
-    {
-      char c = myGsm.read();
-      if (c != '\n') 
-      {
-         data_csq[i] +=c;
-         delay(100);
-      } 
-      else 
-      {
-        i++;  
-      }
-      if (i == 3) 
-      {
-        delay(100);
-        goto exitL;
-      }
-    }
-  }
-  exitL:
-  if (debug) 
-  {
-    data_csq[1].remove(0,6);
-    csq = data_csq[1];
-  }
-}
-
-//===============================PARSING IP================================================
-
-void sendipData(String command , const int timeout , boolean debug){
-
-  myGsm.println(command);
-  long int time = millis();
-  int i = 0;
-
-  while((time+timeout) > millis()){
-    while(myGsm.available()){
-      char c = myGsm.read();
-      if (c != '\n') {
-         data_ip[i] +=c;
+  while((time+timeout) > millis()){ //while timeout is not exceeded
+    while(client.available()){
+      char e = client.read(); //read modules respond
+      delay(100);
+      if (e != '\n') { //parse modules respond with (\n) as delimiter
+         data_gsm[k] +=e; //add modules respond to string array
          delay(100);
       } else {
-        i++;  
+        k++;  
       }
-      if (i == 3) {
+      if (k == 3) {
         delay(100);
-        goto exitL;
+        goto exitc;
       }
     }
-  }exitL:
+  }exitc:
   if (debug) {
-    ip = data_ip[2];
-    delay(1000);
-    data_ip[2].remove(0);
+    data_gsm[1].remove(0,6);
+    raw_gsm = data_gsm[1]; //get parsed gps strength from modules respond
+    raw_gsm.trim();
+    gsm = (((raw_gsm.toInt()-1)*2) - 111); //conversing 0-99 value to (-113)-(-53) dBm, https://m2msupport.net/m2msupport/atcsq-signal-quality/
+    gsm.trim();
   }
+}
+
+//=========================================================INIT GPRS====================================================================
+void connectGPRS()
+{ 
+  sendData("AT+SAPBR=3,1,\"CONTYPE\",\"GPRS\"",1000,DEBUG); //AT-Command to declare Connection Type
+  delay(1000);
+
+  sendData("AT+SAPBR=3,1,\"APN\",\"\"",1000,DEBUG); //AT-Command to Enable APN Setting
+  delay(1000);
+
+  sendData("AT+SAPBR=1,1",1000,DEBUG); //AT-Command to enable GPRS and APN Setting
+  delay(1000);
+}
+
+//=========================================================READ IP====================================================================
+void readIP()
+{
+  sendData("AT+HTTPINIT",1000,DEBUG); //AT-Command to initialize HTTP
+  delay(1000);
+  sendData("AT+HTTPPARA=\"URL\",\"http://ipv4bot.whatismyipaddress.com\"",1000,DEBUG); //AR-Command Setting HTTP Parameter
+  delay(1000);
+  sendData("AT+HTTPACTION=0",1000,DEBUG); //AT-Command to Enable GET Action
+  delay(1000); 
+  sendIpData("AT+HTTPREAD=0,20",3000,DEBUG); //AT-Command to read HTTP GET respond and parsing it
+  delay(3000);
+  sendData("AT+HTTPTERM",1000,DEBUG); //AT-Command to Terimnate HTTP Service
+  delay(1000);
+}
+
+
+//=========================================================PARSE IP====================================================================
+void sendIpData(String command , const int timeout , boolean debug)
+{
+  client.println(command); //print the command to module
+  long int time = millis(); //Set timer for timeout
+  int m = 0;
+
+  while((time+timeout) > millis()){ //while timeout is not exceeded
+    while(client.available() > 0){ 
+      char g = client.read(); //read modules respond
+      delay(100);
+      if (g != '\n')  //parse modules respond with (\n) as delimiter
+      {
+         data_ip[m] +=g; //add modules respond to string array
+         delay(100);
+      } else 
+      {
+        m++;  
+      }
+      if (m == 3) 
+      {
+        delay(100);
+        goto exitd;
+      }
+    }
+  }
+  exitd:
+  if (debug) 
+  {
+    ip = data_ip[2]; //get parsed gps strength from modules respond
+    ip.trim();
+  }
+}
+
+
+//=========================================================WRITE FUNCTION====================================================================
+String sendData (String command , const int timeout ,boolean debug)
+{
+  String response = ""; //Clear modules respond
+  delay(1000);
+  client.println(command); //Print/Send Command to modules
+  long int time = millis();
+  int h = 0;
+
+  while ( (time+timeout ) > millis()) //While timeout not exceeded 
+  {
+    while (client.available())
+    {
+      char b = client.read(); //Read the module's respond
+      delay(100);
+      response +=b; //store the respond to variable
+    }
+  }
+  if (debug) 
+    {
+     Serial.print(response); //Serial print the respond
+     delay(100);
+    }
+     return response;
+}
+
+//==================================================Clear Serial=================================
+void clear_buf() //Clear Payload
+{
+  raw_gsm = "";
+  gsm = "";
+  data_gsm[0]="";
+  data_gsm[1]="";
+  data_gsm[2]="";
+  data_gsm[3]="";
+  data_ip[0]="";
+  data_ip[1]="";
+  data_ip[2]="";
+  data_ip[3]="";
 }
